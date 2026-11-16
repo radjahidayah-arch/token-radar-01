@@ -9,7 +9,7 @@
   var app = document.getElementById('board');
   var WATCH = {};
   (DATA.watchlist || []).forEach(function (s) { WATCH[s] = true; });
-  var state = { q: '', category: 'all', chain: 'all', watchOnly: false, tab: 'pre-token', sort: 'implied', dir: -1, selected: null };
+  var state = { q: '', category: 'all', chain: 'all', watchOnly: false, tab: 'pre-token', sort: 'implied', dir: -1, selected: null, compare: [] };
 
   var usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
   function fmtUsd(n) {
@@ -28,17 +28,26 @@
     if (days >= 365) return (days / 365).toFixed(1) + 'y';
     return Math.max(0, Math.round(days)) + 'd';
   }
+  // A multiplier to four decimals for display: the category factor is carried at full precision
+  // (so the page's recompute matches board.json to the dollar), and only its reading is rounded.
+  function fmtMult(n) {
+    if (n === null || n === undefined || !isFinite(n)) return 'n/a';
+    return Number(n).toFixed(4);
+  }
 
   // The model in one function: the page recomputes a row from the snapshot figures and checks the
   // number board.json carries, so the page's code and the board's data are visibly the same
   // arithmetic. Maturity saturates: a protocol that has run two years with no token is a seasoned
-  // candidate, and a fourth year adds little over a second.
+  // candidate, and a fourth year adds little over a second. The category factor is carried on the
+  // row, because the page only holds the ranked board and not the whole snapshot the median was
+  // taken from; it is the snapshot's own figure, computed by main.ts, never a hand-written number.
   function impliedOf(row, model) {
     var growth = Math.min(model.growth_cap, Math.max(model.growth_floor, row.change_7d === null || row.change_7d === undefined ? 0 : row.change_7d));
     var growthMult = 1 + (growth / 100) * model.growth_weight;
     var age = row.age_days === null || row.age_days === undefined ? model.unknown_age_days : row.age_days;
     var maturity = model.maturity_floor + model.maturity_range * (1 - Math.exp(-Math.max(age, 0) / model.maturity_scale_days));
-    return Math.max(1, Math.round(row.tvl_usd * model.base_multiple * growthMult * maturity));
+    var category = row.category_factor === null || row.category_factor === undefined ? 1 : row.category_factor;
+    return Math.max(1, Math.round(row.tvl_usd * model.base_multiple * growthMult * maturity * category));
   }
 
   // The farm plan is the model's own: each row's farm_steps were written by main.ts from the
@@ -79,6 +88,11 @@
     if (params.get('chain')) state.chain = params.get('chain');
     if (params.get('w') === '1') state.watchOnly = true;
     if (params.get('tab') === 'live') state.tab = 'live';
+    if (params.get('c')) {
+      state.compare = params.get('c').split(',').map(function (s) { return s.trim(); }).filter(function (s) {
+        return s && DATA.rows.some(function (r) { return r.slug === s; });
+      }).slice(0, 2);
+    }
   }
   function writeHash() {
     var params = new URLSearchParams();
@@ -88,9 +102,44 @@
     if (state.watchOnly) params.set('w', '1');
     if (state.tab === 'live') params.set('tab', 'live');
     if (state.selected) params.set('p', state.selected);
+    if (state.compare.length) params.set('c', state.compare.join(','));
     var next = params.toString();
     if (next) window.history.replaceState(null, '', '#' + next);
     else window.history.replaceState(null, '', window.location.pathname + window.location.search);
+  }
+
+  /** The board row for a slug, or null when no row carries it. */
+  function rowBySlug(slug) {
+    var found = DATA.rows.filter(function (r) { return r.slug === slug; })[0];
+    return found || null;
+  }
+
+  /** Whether a slug is one of the two protocols picked for comparison. */
+  function isCompared(slug) {
+    return state.compare.indexOf(slug) >= 0;
+  }
+
+  /**
+   * Toggle one protocol in the compare set. The set holds at most two: picking a third drops the
+   * oldest pick, so the newest two are always the ones compared. Removing a pick never touches
+   * the other one. The bar and the hash are rewritten after every toggle, so the board, the bar
+   * and the address always agree about what is picked.
+   */
+  function toggleCompare(slug) {
+    var at = state.compare.indexOf(slug);
+    if (at >= 0) state.compare.splice(at, 1);
+    else {
+      if (state.compare.length >= 2) state.compare.shift();
+      state.compare.push(slug);
+    }
+    writeHash();
+    renderCompareBar();
+    render();
+  }
+
+  /** The two picked rows, in the order they were picked, or fewer when fewer are picked. */
+  function comparedRows() {
+    return state.compare.map(rowBySlug).filter(function (r) { return r !== null; });
   }
 
   function rows() {
@@ -208,12 +257,25 @@
       var growth = r.change_7d === null ? 'n/a' : fmtPct(r.change_7d);
       var growthClass = r.change_7d === null ? '' : r.change_7d >= 0 ? 'pos' : 'neg';
       var rankClass = r.rank <= 3 ? 'num rank-top' : 'num';
+      // The compare box lives inside the row, so its own click and keys must not reach the row:
+      // a click on the box stops at the box, and a keypress on it never opens the detail view.
+      var box = el('input', {
+        type: 'checkbox',
+        'aria-label': 'Compare ' + r.name,
+        checked: isCompared(r.slug) ? 'checked' : null,
+        onclick: function (e) { e.stopPropagation(); },
+        onchange: function () { toggleCompare(r.slug); }
+      });
       var tr = el('tr', {
         'data-selected': state.selected === r.slug ? 'true' : 'false',
         tabindex: '0',
         onclick: function () { openDetail(r.slug); },
-        onkeydown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(r.slug); } }
+        onkeydown: function (e) {
+          if (e.target && e.target.tagName === 'INPUT') return;
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(r.slug); }
+        }
       },
+        el('td', { class: 'compare-col' }, box),
         el('td', { class: rankClass, text: String(r.rank) }),
         el('td', null, el('div', { class: 'name' },
           el('b', { text: r.name }),
@@ -236,6 +298,7 @@
         el('table', null,
           el('caption', { class: 'sub', text: 'Pre-token protocols, strongest implied value first. Select a row for its model and farm plan.' }),
           el('thead', null, el('tr', null,
+            el('th', { scope: 'col', text: 'Compare' }),
             sortHeader('implied', 'Rank'),
             sortHeader('name', 'Protocol'),
             sortHeader('tvl', 'TVL'),
@@ -279,14 +342,114 @@
       el('h2', { text: 'How implied value is computed' }),
       el('p', { class: 'sub', text: 'Every row is scored by one function of the snapshot figures. No protocol name is special-cased, and no row is hand-picked. Wrapped, staked and bridged products of tokens that already trade are set aside by the same rule the watchlist uses, so the board ranks launches still to come.' }),
       el('div', { class: 'formula' },
-        'implied = round( tvl_usd x ' + m.base_multiple + ' x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + ' + m.maturity_range + ' x (1 - exp(-age_days / ' + m.maturity_scale_days + '))) )'
+        'implied = round( tvl_usd x ' + m.base_multiple + ' x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + ' + m.maturity_range + ' x (1 - exp(-age_days / ' + m.maturity_scale_days + '))) x category )'
       ),
-      el('p', { class: 'sub', text: 'TVL and seven-day growth come from the snapshot. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. Growth is capped because one week of inflow is not a trend, and maturity saturates because a fourth year with no token adds little over a second. The early radar is every other pre-token protocol the snapshot ranks, and the live-token protocols are set aside with their market caps shown.' })
+      el('p', { class: 'sub', text: 'TVL and seven-day growth come from the snapshot. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. Growth is capped because one week of inflow is not a trend, and maturity saturates because a fourth year with no token adds little over a second. The category factor measures a protocol against the median TVL of its own category: 1.00 at the median, ' + m.category_factor_floor + ' far below it, and ' + (m.category_factor_floor + m.category_factor_range) + ' at twice the median or more, so a protocol that leads a small category is not buried under giants from a big one. The early radar is every other pre-token protocol the snapshot ranks, and the live-token protocols are set aside with their market caps shown.' })
     );
   }
 
   var dialog = el('dialog', { class: 'detail', id: 'detail', 'aria-labelledby': 'detail-title' });
   dialog.addEventListener('close', function () { state.selected = null; writeHash(); render(); });
+
+  /** The fixed bar at the foot of the page, holding the protocols picked for comparison. */
+  var compareBarRoot = document.getElementById('compare-bar');
+
+  /** Rewrite the compare bar from the picked set: hidden when nothing is picked, a prompt when
+   * one is picked, and the two names with a Compare button when two are picked. The bar lives
+   * outside the board's own element, so a re-render of the board never wipes it. */
+  function renderCompareBar() {
+    if (!compareBarRoot) return;
+    compareBarRoot.textContent = '';
+    if (state.compare.length === 0) return;
+    var picked = comparedRows();
+    var label = state.compare.length === 1
+      ? 'Compare: ' + picked[0].name + ' — pick one more protocol to compare.'
+      : 'Compare: ' + picked[0].name + ' against ' + picked[1].name;
+    compareBarRoot.appendChild(el('div', { class: 'compare-bar-inner' },
+      el('span', { class: 'compare-label', text: label }),
+      el('button', { class: 'button primary', type: 'button', text: 'Compare', disabled: state.compare.length < 2 ? 'disabled' : null, onclick: function () { openCompare(); } }),
+      el('button', { class: 'button', type: 'button', text: 'Clear', onclick: function () { state.compare = []; writeHash(); renderCompareBar(); render(); } })
+    ));
+  }
+
+  var compareDialog = el('dialog', { class: 'compare', id: 'compare', 'aria-labelledby': 'compare-title' });
+
+  /** One row of the side-by-side table: the figure's name, then each protocol's value. When
+   * `leadHigher` is set, the larger value is marked as the lead; a null is never a lead, and a
+   * context figure (the category median, the plan's length) is never marked either. */
+  function compareMetric(label, aRaw, bRaw, fmt, leadHigher) {
+    var aNum = aRaw === null || aRaw === undefined ? -Infinity : aRaw;
+    var bNum = bRaw === null || bRaw === undefined ? -Infinity : bRaw;
+    var aLead = leadHigher && aNum > bNum;
+    var bLead = leadHigher && bNum > aNum;
+    return el('tr', null,
+      el('th', { scope: 'row', text: label }),
+      el('td', { class: 'num' + (aLead ? ' lead' : ''), text: fmt(aRaw) }),
+      el('td', { class: 'num' + (bLead ? ' lead' : ''), text: fmt(bRaw) })
+    );
+  }
+
+  /** The farm plan's first step, action only, the way the detail view shows it. */
+  function topStepOf(row) {
+    var steps = farmStepsOf(row);
+    if (steps.length === 0) return 'No farm plan.';
+    var first = steps[0];
+    var at = first.indexOf(' Cost: ');
+    return at >= 0 ? first.slice(0, at) : first;
+  }
+
+  /** Open the side-by-side comparison of the two picked protocols: their model breakdowns, the
+   * farm-plan length and each one's top farm step. The table is built fresh from the picked rows
+   * every time it opens, so it can never show a stale pick. */
+  function openCompare() {
+    var picked = comparedRows();
+    if (picked.length < 2) return;
+    var a = picked[0];
+    var b = picked[1];
+    compareDialog.textContent = '';
+    compareDialog.appendChild(el('div', { class: 'detail-head' },
+      el('div', null,
+        el('span', { class: 'brand-name', text: 'Side by side' }),
+        el('h2', { id: 'compare-title', text: a.name + ' vs ' + b.name }),
+        el('p', { class: 'sub', text: 'Rank ' + a.rank + ' against rank ' + b.rank + '. The larger figure in each row is marked.' })
+      ),
+      el('button', { class: 'close', type: 'button', 'aria-label': 'Close comparison', text: 'Close', onclick: function () { compareDialog.close(); } })
+    ));
+    var body = el('tbody');
+    body.appendChild(compareMetric('TVL', a.tvl_usd, b.tvl_usd, fmtUsd, true));
+    body.appendChild(compareMetric('Seven-day growth', a.change_7d, b.change_7d, fmtPct, true));
+    body.appendChild(compareMetric('Age with no token', a.age_days, b.age_days, fmtAge, true));
+    body.appendChild(compareMetric('Growth multiplier', a.growth_multiplier, b.growth_multiplier, String, true));
+    body.appendChild(compareMetric('Category factor', a.category_factor, b.category_factor, fmtMult, true));
+    body.appendChild(compareMetric('Median TVL in its category', a.category_median_tvl_usd, b.category_median_tvl_usd, fmtUsd, false));
+    body.appendChild(compareMetric('Maturity multiplier', a.maturity_multiplier, b.maturity_multiplier, String, true));
+    body.appendChild(compareMetric('Implied value', a.implied_value_usd, b.implied_value_usd, fmtUsd, true));
+    body.appendChild(compareMetric('Farm-plan steps', (a.farm_steps || []).length, (b.farm_steps || []).length, String, false));
+    body.appendChild(el('tr', null,
+      el('th', { scope: 'row', text: 'Top farm step' }),
+      el('td', { class: 'step-cell', text: topStepOf(a) }),
+      el('td', { class: 'step-cell', text: topStepOf(b) })
+    ));
+    compareDialog.appendChild(el('section', { class: 'detail-section' },
+      el('div', { class: 'table-wrap' },
+        el('table', { class: 'compare-table' },
+          el('caption', { class: 'sub', text: 'Each protocol’s model breakdown, side by side, from the same snapshot figures.' }),
+          el('thead', null, el('tr', null,
+            el('th', { scope: 'col', text: 'Figure' }),
+            el('th', { scope: 'col', text: a.name + ' (#' + a.rank + ')' }),
+            el('th', { scope: 'col', text: b.name + ' (#' + b.rank + ')' })
+          )),
+          body
+        )
+      ),
+      el('p', { class: 'sub note', text: 'A larger figure is not always better on its own: growth and the category factor are the model’s judgement, and the farm plan’s first step is the action each protocol asks a farmer to take first.' })
+    ));
+    if (typeof compareDialog.showModal === 'function') {
+      if (!compareDialog.open) compareDialog.showModal();
+    } else {
+      compareDialog.setAttribute('open', '');
+    }
+  }
 
   function openDetail(slug) {
     var row = DATA.rows.filter(function (r) { return r.slug === slug; })[0];
@@ -302,7 +465,10 @@
         el('h2', { id: 'detail-title', text: row.name }),
         el('p', { class: 'sub', text: (row.category || 'Other') + ' on ' + (row.chains && row.chains.length ? row.chains.join(', ') : 'an unnamed chain') })
       ),
-      el('button', { class: 'close', type: 'button', 'aria-label': 'Close details', text: 'Close', onclick: function () { dialog.close(); } })
+      el('div', { class: 'detail-actions' },
+        el('button', { class: 'button', type: 'button', text: isCompared(row.slug) ? 'Remove from compare' : 'Add to compare', onclick: function () { toggleCompare(row.slug); } }),
+        el('button', { class: 'close', type: 'button', 'aria-label': 'Close details', text: 'Close', onclick: function () { dialog.close(); } })
+      )
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Implied value' }),
@@ -312,6 +478,8 @@
         el('div', null, el('span', { text: 'Age with no token' }), el('b', { class: 'num', text: fmtAge(row.age_days) })),
         el('div', null, el('span', { text: 'Growth multiplier' }), el('b', { class: 'num', text: String(row.growth_multiplier) })),
         el('div', null, el('span', { text: 'Maturity multiplier' }), el('b', { class: 'num', text: String(row.maturity_multiplier) })),
+        el('div', null, el('span', { text: 'Category factor' }), el('b', { class: 'num', text: fmtMult(row.category_factor) })),
+        el('div', null, el('span', { text: 'Median TVL in its category' }), el('b', { class: 'num', text: fmtUsd(row.category_median_tvl_usd) })),
         el('div', null, el('span', { text: 'Implied value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) }))
       ),
       el('p', { class: 'sub note', text: 'Model ' + DATA.model_version + ': the same function scores every protocol. The page recomputes this row as ' + fmtUsd(recomputed) + (recomputed === row.implied_value_usd ? ', the same number board.json carries.' : ', which differs from the board: the data would be stale.') + ' This is an estimate, not a price.' })
@@ -344,12 +512,16 @@
     app.appendChild(shell);
     app.setAttribute('aria-busy', 'false');
     if (!dialog.isConnected) app.appendChild(dialog);
+    if (!compareDialog.isConnected) app.appendChild(compareDialog);
+    renderCompareBar();
     if (state.selected) openDetail(state.selected);
   }
 
   readHash();
   render();
+  renderCompareBar();
   window.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && dialog.open) dialog.close();
+    if (e.key === 'Escape' && compareDialog.open) compareDialog.close();
   });
 })();
