@@ -146,6 +146,35 @@ tbody tr:last-child td { border-bottom: 0; }
 .cost { color: var(--muted); font-size: 12px; font-family: var(--font-num); }
 .note { margin-top: var(--step-3); color: var(--muted); font-size: 12px; }
 
+/* Compare: a checkbox column on every board row, a fixed bar at the foot of the page while a
+   protocol is picked, and a side-by-side dialog for the two picked protocols. The bar is fixed
+   so it stays in reach while the board scrolls; the dialog is wider than the detail view because
+   it carries two protocols at once. */
+.compare-col { width: 44px; text-align: center; }
+.compare-col input { accent-color: var(--accent); width: 16px; height: 16px; cursor: pointer; }
+#compare-bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 15; display: flex; justify-content: center; pointer-events: none; }
+.compare-bar-inner {
+  pointer-events: auto; display: flex; align-items: center; gap: var(--step-3); flex-wrap: wrap;
+  margin: var(--step-3); padding: var(--step-3) var(--step-4); background: var(--surface-2);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-panel);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5); max-width: calc(100vw - var(--step-6));
+}
+.compare-label { color: var(--ink); font-size: 13px; }
+.compare-bar-inner .button[disabled] { opacity: 0.45; cursor: not-allowed; }
+.detail-actions { display: flex; align-items: start; gap: var(--step-2); flex: none; }
+.compare {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(780px, 96vw); z-index: 10;
+  background: var(--surface); border-left: 1px solid var(--border-strong); padding: var(--step-5);
+  overflow-y: auto; color: var(--ink);
+}
+.compare[hidden] { display: none; }
+.compare::backdrop { background: rgba(4, 8, 7, 0.6); }
+.compare-table { width: 100%; }
+.compare-table th[scope="row"] { color: var(--muted); font-size: 12px; font-weight: 500; white-space: normal; }
+.compare-table td.step-cell { font-size: 13px; line-height: 1.5; white-space: normal; vertical-align: top; }
+.compare-table td.lead { color: var(--accent); font-weight: 700; }
+.compare-table td.lead::after { content: " ▲"; font-size: 10px; }
+
 @media (max-width: 900px) {
   .shell { padding: var(--step-4); }
   .lede { grid-template-columns: 1fr; gap: var(--step-4); }
