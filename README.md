@@ -13,14 +13,16 @@ The program reads a sealed snapshot of 758 DefiLlama protocols (as of 2026-11-14
 - **TVL** — the base, at 30% of the protocol's total value locked.
 - **Seven-day growth** — capped and weighted, so one hot week is not a trend.
 - **Age with no token** — a maturity factor that saturates after about two years; a protocol that has run for years without issuing a token is seasoned, not forgotten.
+- **Category standing** — the protocol's TVL measured against the median TVL of its own category: 1.00 at the median, 0.85 far below it, 1.15 at twice the median or more, so a protocol that leads a small category is not buried under giants from a big one.
 
-Wrapped, staked, bridged, and exchange products are excluded, so the board ranks launches still to come. The top row is Steakhouse Financial at $638.1M implied value. Every row carries an 8-step farm plan with what each step costs and how long it takes.
+Wrapped, staked, bridged, and exchange products are excluded, so the board ranks launches still to come. The top row is Steakhouse Financial at $733.8M implied value. Every row carries an 8-step farm plan with what each step costs and how long it takes.
 
 ## The board
 
 - 198 rows: all 40 watchlist protocols (TVL of at least $50M, no token on record) plus 158 pre-token protocols below that floor.
 - Sortable by rank, TVL, 7-day change, age, and implied value. Filter by text, category, or chain, or show watchlist only.
 - Click any row for its model breakdown (the page recomputes the row and checks it against board.json) and its full farm plan.
+- Compare any two protocols side by side: tick the Compare box on two rows, or add one from its detail view, and the page shows both model breakdowns, their farm-plan lengths, and each one's top farm step.
 
 ## Run it
 
